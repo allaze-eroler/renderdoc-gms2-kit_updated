@@ -20,20 +20,31 @@ $MODE_YYC=1
 
 $MODE=$MODE_NONE
 
-cd "$PSScriptRoot"
+$SCRIPT_ROOT = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+
+cd "$SCRIPT_ROOT"
 
 # Figure out the project name
 
-$PROJECT_NAME=(Get-ChildItem -Path *.yyp -Name) | Sort-Object LastWriteTime -Descending | Select-Object -first 1 | sed 's/.yyp//'
+$PROJECT_FILE = Get-ChildItem -Path "$SCRIPT_ROOT" -Filter "*.yyp" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+
+$PROJECT_NAME = $PROJECT_FILE.BaseName
 if (! $PROJECT_NAME) { 
     bail("*.yyp file not found!")
 }
 
 # Find .win file
 
-$TEMP_PATH="$env:LOCALAPPDATA\GameMakerStudio2\GMS2TEMP\"
-if (! (Test-Path -Path "$TEMP_PATH")) {
-    bail("Base data path not found!`n(Expected: $TEMP_PATH)")    
+$TEMP_PATHS = @(
+    "$env:LOCALAPPDATA\GameMakerStudio2-LTS2026\GMS2TEMP\",
+    "$env:LOCALAPPDATA\GameMakerStudio2\GMS2TEMP\",
+    "$env:TEMP\GameMaker\"
+)
+
+$TEMP_PATH = $TEMP_PATHS | Where-Object { Test-Path -Path $_ } | Select-Object -First 1
+
+if (! $TEMP_PATH) {
+    bail("Base data path not found!`nChecked:`n$($TEMP_PATHS -join "`n")")
 }
 
 $BUILD_PATH=Get-ChildItem -Path $TEMP_PATH -Recurse -Include "$($PROJECT_NAME).exe", "$($PROJECT_NAME).win" | Sort-Object LastWriteTime -Descending | Select-Object -first 1 | select -ExpandProperty FullName
@@ -53,7 +64,53 @@ if ($MODE -eq $MODE_VM) {
     if (! (Test-Path -Path "$RUNTIME_PATH")) {
         bail("Runtime path not found!`n(Expected: $RUNTIME_PATH)")
     }
-    $RUNNER_PATH=Get-ChildItem -Path $RUNTIME_PATH -Recurse -Filter "Runner.exe" | Sort-Object LastWriteTime -Descending | Select-Object -first 1 | select -ExpandProperty FullName
+$SYSTEM_ARCH = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+$SYSTEM_ARCH = $SYSTEM_ARCH.ToLower()
+
+$RUNNER_PATH = Get-ChildItem -Path $RUNTIME_PATH -Recurse -Filter "Runner.exe" |
+    Where-Object { $_.FullName -like "*\windows\*\Runner.exe" } |
+    Sort-Object @{
+        Expression = {
+            $RUNNER_FOLDER = Split-Path -Leaf (Split-Path -Parent $_.FullName)
+            $RUNNER_FOLDER = $RUNNER_FOLDER.ToLower()
+
+            $SCORE = 0
+
+            if ($RUNNER_FOLDER -eq $SYSTEM_ARCH)
+            {
+                $SCORE += 1000
+            }
+
+            for ($i = 0; $i -lt $RUNNER_FOLDER.Length; $i++)
+            {
+                $CHAR = $RUNNER_FOLDER.Substring($i, 1)
+
+                if ($SYSTEM_ARCH.Contains($CHAR))
+                {
+                    $SCORE += 10
+                }
+                else
+                {
+                    $SCORE -= 10
+                }
+            }
+
+            for ($i = 0; $i -lt $SYSTEM_ARCH.Length; $i++)
+            {
+                $CHAR = $SYSTEM_ARCH.Substring($i, 1)
+
+                if ($RUNNER_FOLDER.Contains($CHAR))
+                {
+                    $SCORE += 1
+                }
+            }
+
+            -$SCORE
+        }
+    }, LastWriteTime -Descending |
+    Select-Object -First 1 |
+    Select-Object -ExpandProperty FullName
+
     if (! (Test-Path -Path $RUNNER_PATH)) { 
         bail("No runner found!`n(Expected: $RUNNER_PATH)") 
     }
